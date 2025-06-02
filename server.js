@@ -1,47 +1,50 @@
 const express = require("express");
 const bodyParser = require("body-parser");
 const axios = require("axios");
-require("dotenv").config();
+const { OpenAI } = require("openai");
 
 const app = express();
-app.use(bodyParser.urlencoded({ extended: false }));
+app.use(bodyParser.json());
 
-app.post("/webhook", async (req, res) => {
-  const userMessage = req.body.Body;
-  const fromNumber = req.body.From;
-
-  const openaiRes = await axios.post(
-    "https://api.openai.com/v1/chat/completions",
-    {
-      model: "gpt-4",
-      messages: [{ role: "user", content: userMessage }]
-    },
-    {
-      headers: {
-        "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
-        "Content-Type": "application/json"
-      }
-    }
-  );
-
-  const gptResponse = openaiRes.data.choices[0].message.content;
-
-  await axios.post(
-    `https://api.twilio.com/2010-04-01/Accounts/${process.env.TWILIO_ACCOUNT_SID}/Messages.json`,
-    new URLSearchParams({
-      Body: gptResponse,
-      From: `whatsapp:${process.env.TWILIO_NUMBER}`,
-      To: fromNumber
-    }),
-    {
-      auth: {
-        username: process.env.TWILIO_ACCOUNT_SID,
-        password: process.env.TWILIO_AUTH_TOKEN
-      }
-    }
-  );
-
-  res.sendStatus(200);
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
 });
 
-app.listen(3000, () => console.log("Bot läuft auf Port 3000"));
+app.post("/webhook", async (req, res) => {
+  const message = req.body.message?.body;
+  const from = req.body.message?.from;
+
+  if (!message || !from) return res.sendStatus(400);
+
+  try {
+    const completion = await openai.chat.completions.create({
+      model: "gpt-3.5-turbo",
+      messages: [
+        { role: "system", content: "Du bist ein freundlicher Kunden-Support-Bot für IPTV-Dienste." },
+        { role: "user", content: message }
+      ]
+    });
+
+    const reply = completion.choices[0].message.content;
+
+    await axios.post(`https://api.ultramsg.com/${process.env.ULTRAMSG_INSTANCE_ID}/messages/chat`, {
+      token: process.env.ULTRAMSG_TOKEN,
+      to: from,
+      body: reply
+    });
+
+    res.sendStatus(200);
+  } catch (err) {
+    console.error("Fehler beim Antworten:", err.message);
+    res.sendStatus(500);
+  }
+});
+
+app.get("/", (req, res) => {
+  res.send("WhatsApp GPT Bot läuft ✅");
+});
+
+const port = process.env.PORT || 3000;
+app.listen(port, () => {
+  console.log("Server läuft auf Port " + port);
+});
